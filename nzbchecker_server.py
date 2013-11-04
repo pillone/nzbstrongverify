@@ -141,9 +141,12 @@ def getsmallest_healthy_par(infodata):
 		fp.close()
 	
 	#~ download NZB
+	print ''
+	print 'Download the tiniest and healthiest par2'
 	subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
 	subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
 	
+	print 'Extracting info from par2'
 	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
 	out, err = process.communicate()
 	bmsg = 'The block size used was '
@@ -319,6 +322,7 @@ def calculate_health(msg):
 	totblocks = overall_count / bsze
 	missblocks = missing_count / bsze
 	
+	print ''
 	print 'Tot: ' + str(overall_count) + ' Miss: ' + str(missing_count)
 	if(bsze != -1):
 		print 'Blocksize (reported by par2): ' + str(bsze)
