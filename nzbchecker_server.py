@@ -12,34 +12,45 @@ import threading
 import HTMLParser
 import string
 import cgi
+import signal
 import subprocess
 
+MAXREPEAT = 3
 TIMEOUT = 5
 completion_counter = 0
-completion_counter_allout = 0
+completion_counter_allout = -1
 lock = threading.Lock()
 
 class TelnetConnection():
 
-	def __init__(self, conf):
+	def __init__(self, conf, idx):
 		self.conf = conf
+		self.idx = idx
 		
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
 	def init_and_stat(self, msg):
 		self.tn = nntp.NNTP(self.conf['host'], 443, self.conf['user'], self.conf['pass'], True)
-		print self.tn.welcome
+		#~ print self.tn.welcome
 		self.stat_all(msg)
-		self.tn.quit()
-		with lock:
-			global completion_counter_allout
-			completion_counter_allout += 1
+
+		try:
+			self.tn.quit()
+		except Exception as e:
+			#~ print "Error disconnecting: "  + " %s" % e,
+			print "d",
+			
+		if(self.idx == self.conf['connections']-1):
+			with lock:
+				global completion_counter_allout
+				completion_counter_allout = self.idx
 
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
 	def stat_all(self, msg):
 		lastgrp = ''
+
 		#~ for info in infodata['detail']:
 		#~ if(info[2] == 0 or info[2] == 1 or info[2] == 4):
 
@@ -53,23 +64,30 @@ class TelnetConnection():
 					global completion_counter
 					completion_counter += 1				
 				m[5] = -1
-				try:
-					if(lastgrp != m[4][0]):
-						lastgrp = m[4][0]
-						self.tn.group(m[4][0])
-						#~ print 'change grp'
-						
-					self.tn.stat("<"+m[3]+">")
-					m[5] = 1
-					#~ print "Found: %s" % m[3]
-				except nntplib.NNTPTemporaryError, e:
-					# Error code 430 is "No such article"
-					error = nntp.get_error_code(e)
-					if error == '430':
-						print "Missing article " + m[3] + " : %s" % e
-						m[5] = 0
-					else:
-						print "Error: " + m[3] + " %s" % e
+				repeat = MAXREPEAT
+				while (repeat):
+					try:
+						if(lastgrp != m[4][0]):
+							lastgrp = m[4][0]
+							self.tn.group(m[4][0])
+							#~ print 'change grp'
+							
+						self.tn.stat("<"+m[3]+">")
+						m[5] = 1
+						repeat = 0
+					except Exception as e:	
+						error = nntp.get_error_code(e)
+						if error == '430':
+							#~ print "Missing article " + m[3] + " : %s" % e
+							print "*",
+							m[5] = 0
+							repeat = 0
+						else:
+							#~ print "Error ("+ str(repeat) +" more attempts, trying again: " + m[3] + " %s" % e
+							print "e",
+							repeat -= 1
+
+
 		
 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -124,7 +142,7 @@ def getsmallest_healthy_par(infodata):
 	
 	#~ download NZB
 	subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
-	subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"])
+	subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
 	
 	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
 	out, err = process.communicate()
@@ -320,13 +338,22 @@ def calculate_health(msg):
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
 def completion_monitor(outp, connmax):
-	while (completion_counter_allout < connmax-1 ):
+	while (completion_counter_allout != connmax-1 ):
 		time.sleep(1)
-		print str(completion_counter) + '/' +str(len(outp['detail']))
+		#~ print '\r[{0}] {1}%'.format('#'*(completion_counter/len(outp['detail'])), len(outp['detail']))
+		print "\r"+str(completion_counter) + '/' +str(len(outp['detail'])),
+		sys.stdout.flush()
 
 def printUsage():
 	print "Usage: python nzb_checker.py  --nzb=thisismynzb.nzb --server=newszilla6.xs4all.nl --user=newsservername --pass=newsserverpassword [--connections=4]  [--debug=1]"
 
+#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+def signal_handler(signal, frame):
+        print 'You pressed Ctrl+C!'
+        sys.exit(0)
+        	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 print '++++++++++++++++++++++++++++++++++++'
@@ -357,7 +384,7 @@ for opt, arg in opts:
 		if int(arg)>0:
 			debug = True
 
-print conf 
+#~ print conf 
 
 if(len(conf['host'])==0 or len(conf['user'])==0 or len(conf['pass'])==0):
 	printUsage()
@@ -366,12 +393,15 @@ if(len(nzbfilename1)==0):
 	print 'missing nzb input' 
 	exit(1)			
 
+# TODO: Listen to other signals
+signal.signal(signal.SIGINT, signal_handler)
+
 data1 = open(nzbfilename1).read()
 outp = getnzbinfo(data1)
 nnt = []
 tthr = []
 for i in xrange(conf['connections']):
-	nnt.append(TelnetConnection(conf))
+	nnt.append(TelnetConnection(conf,i))
 for i in xrange(conf['connections']):
 	tthr.append( threading.Thread(target=nnt[i].init_and_stat, args=([outp]) ) )
 tthr.append( threading.Thread(target=completion_monitor, args=(outp, conf['connections']) ) )	
