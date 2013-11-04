@@ -15,6 +15,7 @@ import cgi
 import signal
 import subprocess
 
+DEBUG = 1
 MAXREPEAT = 3
 TIMEOUT = 5
 completion_counter = 0
@@ -170,13 +171,13 @@ def getinfofrompar(infodata):
 		#~ if(info[2] == 4):
 			#~ print info[5]
 		if(info[2] == 4 and info[5] == 1):
-			par2idx = 	info[0].find('.par2')
+			par2idx = 	info[0].lower().find('.par2')
 			
 			#~ extract rootname
 			npar = info[0][1:par2idx+5]
 			npar_sep1 = info[0][1:par2idx].rfind(' ')
 			npar_sep2 = info[0][1:par2idx].rfind('"')
-			npar_sep_vol = info[0][1:par2idx].rfind('.vol')
+			npar_sep_vol = info[0][1:par2idx].lower().rfind('.vol')
 			minidx = max(npar_sep1,npar_sep2)
 			output['rootfile'] = npar
 			if(minidx != -1):
@@ -215,6 +216,9 @@ def getnzbinfo(data):
 	fileinfo['nzb'] = 0
 	fileinfo['sfv'] = 0
 	fileinfo['postid'] = []
+	
+	allfiles={}
+	
 	rootfile = ''
 	nbytes = 0
 	for fno in fileno:	
@@ -230,24 +234,26 @@ def getnzbinfo(data):
 			val_sample =  re.search(r"[\.\-]sample", fno['subject'], re.I)	
 			if(val_sample is not None):
 				continue				
-			par2idx = 	fno['subject'].find('.par2')
+			par2idx = 	fno['subject'].lower().find('.par2')
 			if ( par2idx != -1):
 				typefile = 1
 				fileinfo['pars'] = fileinfo['pars'] + 1
 				npar_vol =  re.search(r".vol[0-9]{1,4}", fno['subject'][1:par2idx+5], re.I)	
 				if(npar_vol is not None):
 					typefile = 4
-			if (fno['subject'].find('.nfo') != -1):
+			if (fno['subject'].lower().find('.nfo') != -1):
 				typefile = 2
 				fileinfo['nfo'] = fileinfo['nfo'] + 1
-			if (fno['subject'].find('.sfv') != -1):
+			if (fno['subject'].lower().find('.sfv') != -1):
 				typefile = 3
 				fileinfo['sfv'] = fileinfo['sfv'] + 1
-			if (fno['subject'].find('.nzb') != -1):
+			if (fno['subject'].lower().find('.nzb') != -1):
 				typefile = 5
-				print fno['subject']
 				fileinfo['nzb'] = fileinfo['nzb'] + 1
 			
+			if(typefile == 0):
+				allfiles[h.unescape(fno['subject'])] = 1
+				
 			cur_group = []
 			for g in groups:	
 				g_groups = g.findAll('group')
@@ -269,6 +275,14 @@ def getnzbinfo(data):
 	outp={}
 	outp['summary'] = fileinfo
 	outp['detail'] = filesegs
+	
+	allfiles_sorted=[]
+	for key in allfiles:
+		allfiles_sorted.append(key)
+	allfiles_sorted = sorted(allfiles_sorted)	
+	for s in allfiles_sorted:
+		print s
+	print len(allfiles_sorted)
 	return outp
 
 
@@ -283,30 +297,25 @@ def calculate_health(msg):
 	
 	#~ par ecc
 	
+	if(DEBUG == 0):
+		for m in msg['detail']:
+			if( (m[2] == 4 or m[2] == 1)   and m[5] != 1 ):
+				#~ broken par remove all entries related to this file, -10 removal marking
+				for m1 in msg['detail']:
+					if(m[0] == m1[0] ):
+						m1[5] = -1	
+	if(DEBUG):
+		for m in msg['detail']:
+			if((m[2] == 4  or m[2] == 1)and m[5] != 1 ):
+				#~ broken par remove all entries related to this file, -10 removal marking
+				for m1 in msg['detail']:
+					if(m[0] == m1[0] ):
+						m1[5] = 1	
 
-	for m in msg['detail']:
-		if( (m[2] == 4 or m[2] == 1)   and m[5] != 1 ):
-			#~ broken par remove all entries related to this file, -10 removal marking
-			for m1 in msg['detail']:
-				if(m[0] == m1[0] ):
-					m1[5] = -1	
-
-	'''
-	#~ FAKE
-	#~ ===================
-	for m in msg['detail']:
-		if((m[2] == 4  or m[2] == 1)and m[5] != 1 ):
-			#~ broken par remove all entries related to this file, -10 removal marking
-			for m1 in msg['detail']:
-				if(m[0] == m1[0] ):
-					m1[5] = 1	
-	#~ ===================
-	'''
 	#~ compute block avail
 	parinfo = getinfofrompar(msg)
 	#~ download smallest par pack, anaylize with par2 the block size 
 	bsze = getsmallest_healthy_par(msg)
-	availblocks = parinfo['nblocks']
 
 	#~ archive
 	overall_count = 0
@@ -317,13 +326,15 @@ def calculate_health(msg):
 			if( m[5] != 1 ):
 				missing_count += m[1]
 
-				
-	#~ "%.2f" % a
-	totblocks = overall_count / bsze
-	missblocks = missing_count / bsze
+	availblocks = parinfo['nblocks']
+	totblocks = float(overall_count) / float(bsze)
+	missblocks = float(missing_count) / float(bsze)
 	
 	print ''
-	print 'Tot: ' + str(overall_count) + ' Miss: ' + str(missing_count)
+	print 'Tot: ' + str(overall_count) + ' bytes Miss: ' + str(missing_count) + ' bytes'
+
+	if (missblocks < 1):
+		missblocks = 1
 	if(bsze != -1):
 		print 'Blocksize (reported by par2): ' + str(bsze)
 		print 'Totblocks: %.2f' % totblocks + ' Missblocks: %.2f' %  missblocks + ' Availblocks: %.2f' %  availblocks
@@ -401,18 +412,22 @@ if(len(nzbfilename1)==0):
 signal.signal(signal.SIGINT, signal_handler)
 
 data1 = open(nzbfilename1).read()
+print 'Parsing NZB'
 outp = getnzbinfo(data1)
 nnt = []
 tthr = []
-for i in xrange(conf['connections']):
-	nnt.append(TelnetConnection(conf,i))
-for i in xrange(conf['connections']):
-	tthr.append( threading.Thread(target=nnt[i].init_and_stat, args=([outp]) ) )
-tthr.append( threading.Thread(target=completion_monitor, args=(outp, conf['connections']) ) )	
-for t in tthr:
-	t.start()
-for t in tthr:
-	t.join()
+
+print 'Connecting with server'
+if(DEBUG == 0):
+	for i in xrange(conf['connections']):
+		nnt.append(TelnetConnection(conf,i))
+	for i in xrange(conf['connections']):
+		tthr.append( threading.Thread(target=nnt[i].init_and_stat, args=([outp]) ) )
+	tthr.append( threading.Thread(target=completion_monitor, args=(outp, conf['connections']) ) )	
+	for t in tthr:
+		t.start()
+	for t in tthr:
+		t.join()
 
 msg = calculate_health(outp)
 
