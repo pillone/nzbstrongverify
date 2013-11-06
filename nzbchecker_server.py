@@ -14,10 +14,12 @@ import string
 import cgi
 import signal
 import subprocess
+import math
 
-DEBUG = 1
+DEBUG = 0
 MAXREPEAT = 3
 TIMEOUT = 5
+BLOCKAPPROX = 2
 completion_counter = 0
 completion_counter_allout = -1
 lock = threading.Lock()
@@ -126,7 +128,12 @@ def getsmallest_healthy_par(infodata):
 				segs += s + '\r\n'
 				count = count + 1
 	
-	#~ print cursmallest
+	print ''
+	if(len(subject) == 0):
+		print 'There is no healthy PAR2!'
+		return -1
+	
+	print 'Get info from: ' + cgi.escape(subject, quote=True)
 	
 	#~ generate NZB
 	if(len(segs)):
@@ -275,14 +282,15 @@ def getnzbinfo(data):
 	outp={}
 	outp['summary'] = fileinfo
 	outp['detail'] = filesegs
-	
-	allfiles_sorted=[]
-	for key in allfiles:
-		allfiles_sorted.append(key)
-	allfiles_sorted = sorted(allfiles_sorted)	
-	for s in allfiles_sorted:
-		print s
-	print len(allfiles_sorted)
+
+	#~ legacy debug info 
+	#~ allfiles_sorted=[]
+	#~ for key in allfiles:
+		#~ allfiles_sorted.append(key)
+	#~ allfiles_sorted = sorted(allfiles_sorted)	
+	#~ for s in allfiles_sorted:
+		#~ print s
+	#~ print len(allfiles_sorted)
 	return outp
 
 
@@ -296,7 +304,6 @@ def calculate_health(msg):
 	missing_count_articles = 0
 	
 	#~ par ecc
-	
 	if(DEBUG == 0):
 		for m in msg['detail']:
 			if( (m[2] == 4 or m[2] == 1)   and m[5] != 1 ):
@@ -331,18 +338,29 @@ def calculate_health(msg):
 	missblocks = float(missing_count) / float(bsze)
 	
 	print ''
-	print 'Tot: ' + str(overall_count) + ' bytes Miss: ' + str(missing_count) + ' bytes'
+	#~ print 'Tot (yenc compressed): ' + str(overall_count) + ' bytes Miss (yenc compressed): ' + str(missing_count) + ' bytes'
+	print 'Analysis (yenc compressed)'
+	print '=========================='
+	print 'Total in bytes: ' + str(overall_count)
+	print 'Miss. in bytes: ' + str(missing_count)
 
 	if (missblocks < 1):
 		missblocks = 1
 	if(bsze != -1):
-		print 'Blocksize (reported by par2): ' + str(bsze)
-		print 'Totblocks: %.2f' % totblocks + ' Missblocks: %.2f' %  missblocks + ' Availblocks: %.2f' %  availblocks
-
+		#~ these are conservative estimates
+		print 'Blocksize non-yenc compressed: ' + str(bsze)
+		print 'Totblocks: %.2f' % totblocks 
+		print 'Missblocks: %.2f' %  missblocks 
+		print 'Availblocks: %.2f' %  availblocks
+		print ''
+		print 'Results'
+		print '=========================='
 		if(missblocks == 0):
 			print 'Perfect data'
 		else:
-			if(availblocks > missblocks):
+			if(availblocks == missblocks-BLOCKAPPROX):
+				print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
+			elif(availblocks > missblocks):
 				print 'Ok or fixable through PAR2'
 			else:	
 				print 'This is broken'		
@@ -371,11 +389,45 @@ def signal_handler(signal, frame):
         	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-print '++++++++++++++++++++++++++++++++++++'
-print 'Accurate NZB automated verification'
-print 'from 0byte'
-print '++++++++++++++++++++++++++++++++++++'
 
+def computeuncompresed_msgsz(params):
+
+	print params['files_qty']
+	print params['block_bytes']
+	print params['block_qty']
+	print params['total_bytes']
+	
+	#~ compute numblocks per file
+
+	#~ only last file can be composed of lesser blocks
+	#~ it is the remainder of the equally sized chunks subdivision
+	#~ this procedure is made by (almost) all packaging sw
+	nonfrac_files = params['files_qty']
+	val = math.modf(float(params['block_qty'])/float(nonfrac_files))
+	numblocks_perfile = int(val[1])
+	rem_numblocks_perfile = int(params['block_qty'])%int(nonfrac_files)
+	if(rem_numblocks_perfile):
+		nonfrac_files = params['files_qty'] -1
+		val = math.modf(float(params['block_qty'])/float(nonfrac_files))
+		numblocks_perfile = int(val[1])
+	lastfile_numblocks = params['block_qty'] - numblocks_perfile*nonfrac_files
+
+	print numblocks_perfile	
+	print lastfile_numblocks
+	
+	#~ only last segment of a file can be composed of lesser blocks
+	#~ see above 
+
+	
+	
+#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+	
+print '++++++++++++++++++++++++++++++++++++++++++++'
+print '(Almost) Accurate NZB automated verification'
+print 'from 0byte'
+print '++++++++++++++++++++++++++++++++++++++++++++'
+print ''
 conf={}
 conf['connections'] = 19
 conf['host'] = ''
@@ -417,7 +469,7 @@ outp = getnzbinfo(data1)
 nnt = []
 tthr = []
 
-print 'Connecting with server'
+print 'Connecting server'
 if(DEBUG == 0):
 	for i in xrange(conf['connections']):
 		nnt.append(TelnetConnection(conf,i))
@@ -430,6 +482,3 @@ if(DEBUG == 0):
 		t.join()
 
 msg = calculate_health(outp)
-
-
-
