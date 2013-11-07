@@ -344,7 +344,7 @@ def calculate_health(msg):
 	print 'Total in bytes: ' + str(overall_count)
 	print 'Miss. in bytes: ' + str(missing_count)
 
-	if (missblocks < 1):
+	if (missblocks > 0 and missblocks < 1):
 		missblocks = 1
 	if(bsze != -1):
 		#~ these are conservative estimates
@@ -419,6 +419,23 @@ def computeuncompresed_msgsz(params):
 	#~ see above 
 
 	
+#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+def getfilelistfrompar(data1):
+	print 'Extracting info from par2'
+	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
+	out, err = process.communicate()
+	bmsg = 'The block size used was '
+	nidx = out.find(bmsg)
+	nidx2 = out[nidx+len(bmsg):].find(' ')
+	blocksize = int(out[nidx+len(bmsg):nidx2+nidx+len(bmsg)])
+	nidx = out.find('Target')
+	listfiles=re.findall(r'\"(.+?)\"',out[nidx:])
+
+	#~ print matches
+	#~ print blocksize
+	#~ print out[nidx:]
+	
 	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -445,7 +462,7 @@ for opt, arg in opts:
 		conf['user'] = arg
 	elif opt in ('-p', '--pass'):
 		conf['pass'] = arg
-	elif opt in ('-t', '--threads'):
+	elif opt in ('-c', '--connections'):
 		conf['connections'] = int(arg)
 	elif opt in ('-d', '--debug'):
 		if int(arg)>0:
@@ -468,6 +485,9 @@ print 'Parsing NZB'
 outp = getnzbinfo(data1)
 nnt = []
 tthr = []
+
+outp = getfilelistfrompar(data1)
+exit(1)
 
 print 'Connecting server'
 if(DEBUG == 0):
