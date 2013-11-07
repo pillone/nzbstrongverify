@@ -151,21 +151,12 @@ def getsmallest_healthy_par(infodata):
 	#~ download NZB
 	print ''
 	print 'Download the tiniest and healthiest par2'
-	subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
-	subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
+	if(DEBUG==0):
+		subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
+		subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
 	
-	print 'Extracting info from par2'
-	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
-	out, err = process.communicate()
-	bmsg = 'The block size used was '
-	nidx = out.find(bmsg)
-	nidx2 = out[nidx+len(bmsg):].find(' ')
-	if(nidx == -1 or nidx2 == -1):
-		print 'FATAL: cannot find block size, par2 or download failed'
-		return -1
-
-	blocksize = int(out[nidx+len(bmsg):nidx2+nidx+len(bmsg)])
-
+	blocksize = analyzefilelistpar(infodata)
+	 
 	return blocksize
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
@@ -327,11 +318,19 @@ def calculate_health(msg):
 	#~ archive
 	overall_count = 0
 	missing_count = 0
+	par2miss = 0
+	goodfiles_count = 0
 	for m in msg['detail']:
 		if(m[2] == 0 ):
 			overall_count += m[1]
-			if( m[5] != 1 ):
+			goodfiles_count += 1
+			if( m[5] == -4 ):
+				par2miss += 1 
+			
+			if( m[5] != 1 and m[5] != -4 ):
 				missing_count += m[1]
+	
+			
 
 	availblocks = parinfo['nblocks']
 	totblocks = float(overall_count) / float(bsze)
@@ -347,6 +346,9 @@ def calculate_health(msg):
 	if (missblocks > 0 and missblocks < 1):
 		missblocks = 1
 	if(bsze != -1):
+		if (par2miss > 0):
+			print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
+		
 		#~ these are conservative estimates
 		print 'Blocksize non-yenc compressed: ' + str(bsze)
 		print 'Totblocks: %.2f' % totblocks 
@@ -358,6 +360,11 @@ def calculate_health(msg):
 		if(missblocks == 0):
 			print 'Perfect data'
 		else:
+			if (par2miss > 0):
+				print 'No files in par2. Cannot be fixed'
+				return
+
+			
 			if(availblocks == missblocks-BLOCKAPPROX):
 				print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
 			elif(availblocks > missblocks):
@@ -366,6 +373,10 @@ def calculate_health(msg):
 				print 'This is broken'		
 	else:
 		print 'PAR2 info not available'
+		if(overall_count != missing_count):
+			print 'This is broken'		
+		else:	
+			print 'Ok. All messages are on the server'
 	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -389,7 +400,7 @@ def signal_handler(signal, frame):
         	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-
+'''
 def computeuncompresed_msgsz(params):
 
 	print params['files_qty']
@@ -417,11 +428,11 @@ def computeuncompresed_msgsz(params):
 	
 	#~ only last segment of a file can be composed of lesser blocks
 	#~ see above 
-
+'''
 	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-def getfilelistfrompar(data1):
+def analyzefilelistpar(infofile):
 	print 'Extracting info from par2'
 	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
 	out, err = process.communicate()
@@ -429,12 +440,27 @@ def getfilelistfrompar(data1):
 	nidx = out.find(bmsg)
 	nidx2 = out[nidx+len(bmsg):].find(' ')
 	blocksize = int(out[nidx+len(bmsg):nidx2+nidx+len(bmsg)])
+	if(nidx == -1 or nidx2 == -1):
+		print 'FATAL: cannot find block size, par2 or download failed'
+		return -1
 	nidx = out.find('Target')
-	listfiles=re.findall(r'\"(.+?)\"',out[nidx:])
+	listfiles=map(lambda x:x.lower(),re.findall(r'\"(.+?)\"',out[nidx:]))	
 
-	#~ print matches
-	#~ print blocksize
-	#~ print out[nidx:]
+	if(len(listfiles) == 0):
+		print 'FATAL: cannot find available file list from par2'
+		return -1
+	
+	for info in infofile['detail']:
+		if(info[5] == 1):
+			isfound = False
+			for l in listfiles:
+				if(info[0].lower().find(l) != -1):
+					isfound = True
+					break
+			if(isfound == False):
+				info[5]	= -4
+		
+	return blocksize	
 	
 	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -468,7 +494,7 @@ for opt, arg in opts:
 		if int(arg)>0:
 			debug = True
 
-#~ print conf 
+signal.signal(signal.SIGINT, signal_handler)
 
 if(len(conf['host'])==0 or len(conf['user'])==0 or len(conf['pass'])==0):
 	printUsage()
@@ -477,17 +503,12 @@ if(len(nzbfilename1)==0):
 	print 'missing nzb input' 
 	exit(1)			
 
-# TODO: Listen to other signals
-signal.signal(signal.SIGINT, signal_handler)
 
 data1 = open(nzbfilename1).read()
 print 'Parsing NZB'
 outp = getnzbinfo(data1)
 nnt = []
 tthr = []
-
-outp = getfilelistfrompar(data1)
-exit(1)
 
 print 'Connecting server'
 if(DEBUG == 0):
