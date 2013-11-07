@@ -270,15 +270,15 @@ def getnzbinfo(data):
 			print "Error, could not parse NZB file " + str(e)
 			sys.exit()
 
+	allfiles_sorted=[]
+	for key in allfiles:
+		allfiles_sorted.append(key)
+	allfiles_sorted = sorted(allfiles_sorted)	
 	outp={}
 	outp['summary'] = fileinfo
 	outp['detail'] = filesegs
+	outp['filename'] = allfiles_sorted
 
-	#~ legacy debug info 
-	#~ allfiles_sorted=[]
-	#~ for key in allfiles:
-		#~ allfiles_sorted.append(key)
-	#~ allfiles_sorted = sorted(allfiles_sorted)	
 	#~ for s in allfiles_sorted:
 		#~ print s
 	#~ print len(allfiles_sorted)
@@ -327,7 +327,7 @@ def calculate_health(msg):
 			if( m[5] == -4 ):
 				par2miss += 1 
 			
-			if( m[5] != 1 and m[5] != -4 ):
+			if( m[5] != 1):
 				missing_count += m[1]
 	
 			
@@ -346,24 +346,24 @@ def calculate_health(msg):
 	if (missblocks > 0 and missblocks < 1):
 		missblocks = 1
 	if(bsze != -1):
-		if (par2miss > 0):
-			print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
+		#~ if (par2miss > 0):
+			#~ print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
 		
 		#~ these are conservative estimates
 		print 'Blocksize non-yenc compressed: ' + str(bsze)
 		print 'Totblocks: %.2f' % totblocks 
-		print 'Missblocks: %.2f' %  missblocks 
+		print 'Missblocks/non par2 compatible: %.2f' %  missblocks 
 		print 'Availblocks: %.2f' %  availblocks
 		print ''
 		print 'Results'
 		print '=========================='
+		#~ if (missing_count > 0 and par2miss > 0):
+			#~ print 'No files in par2. Cannot be fixed'
+			#~ return
+
 		if(missblocks == 0):
 			print 'Perfect data'
 		else:
-			if (par2miss > 0):
-				print 'No files in par2. Cannot be fixed'
-				return
-
 			
 			if(availblocks == missblocks-BLOCKAPPROX):
 				print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
@@ -450,6 +450,7 @@ def analyzefilelistpar(infofile):
 		print 'FATAL: cannot find available file list from par2'
 		return -1
 	
+	#~ declare them invalid
 	for info in infofile['detail']:
 		if(info[5] == 1):
 			isfound = False
