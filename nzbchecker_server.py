@@ -16,7 +16,7 @@ import signal
 import subprocess
 import math
 
-DEBUG = 0
+DEBUG = 1
 MAXREPEAT = 3
 TIMEOUT = 5
 BLOCKAPPROX = 2
@@ -325,9 +325,8 @@ def calculate_health(msg):
 			overall_count += m[1]
 			goodfiles_count += 1
 			if( m[5] == -4 ):
-				par2miss += 1 
-			
-			if( m[5] != 1):
+				par2miss  += m[1]
+			if( m[5] == -1 or m[5] == 0):
 				missing_count += m[1]
 	
 			
@@ -335,6 +334,7 @@ def calculate_health(msg):
 	availblocks = parinfo['nblocks']
 	totblocks = float(overall_count) / float(bsze)
 	missblocks = float(missing_count) / float(bsze)
+	par2missblocks = float(par2miss) / float(bsze)
 	
 	print ''
 	#~ print 'Tot (yenc compressed): ' + str(overall_count) + ' bytes Miss (yenc compressed): ' + str(missing_count) + ' bytes'
@@ -352,20 +352,20 @@ def calculate_health(msg):
 		#~ these are conservative estimates
 		print 'Blocksize non-yenc compressed: ' + str(bsze)
 		print 'Totblocks: %.2f' % totblocks 
-		print 'Missblocks/non par2 compatible: %.2f' %  missblocks 
-		print 'Availblocks: %.2f' %  availblocks
+		print '> Missblocks: %.2f' %  missblocks 
+		if(par2missblocks):
+			print '> Unrepairableblocks (non in par2): %.2f' %  par2missblocks 
+		print '> Availblocks: %.2f' %  availblocks
 		print ''
 		print 'Results'
 		print '=========================='
-		#~ if (missing_count > 0 and par2miss > 0):
-			#~ print 'No files in par2. Cannot be fixed'
-			#~ return
+		availblocks = availblocks - par2missblocks
 
 		if(missblocks == 0):
 			print 'Perfect data'
 		else:
 			
-			if(availblocks == missblocks-BLOCKAPPROX):
+			if(availblocks > missblocks-BLOCKAPPROX and availblocks <= missblocks):
 				print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
 			elif(availblocks > missblocks):
 				print 'Ok or fixable through PAR2'
