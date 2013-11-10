@@ -90,294 +90,396 @@ class TelnetConnection():
 							print "e",
 							repeat -= 1
 
-
-		
+	
 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-def getsmallest_healthy_par(infodata):
-	
-	cursmallest = len(infodata['detail'])
-	smallest_par_segment = []
-	segmentstr = '<segment bytes="$bytes" number="$num">$mid</segment>'
-	count = 1
-	subject = ''
-	group = ''
-	#~ get smallest vol
-	for info in infodata['detail']:
-		if(info[6] < cursmallest):
-			if((info[2] == 4 or info[2] == 1) and info[5] == 1 ):
-				cursmallest = info[6]
+class HealthChecker():
 
-	#~ get all segments
-	segs = ''
-	for info in infodata['detail']:
-		if(cursmallest == -2):
-			if(info[2] == 1):
-				s = string.Template(segmentstr).substitute({'bytes':info[1], 'num':count, 'mid':cgi.escape(info[3], quote=True)})
-				subject = info[0]
-				group = info[4][0]
-				segs += s + '\r\n'
-				count = count + 1
+	def __init__(self, data):
+		self.STATUS_OK = 1
+		self.STATUS_MISS = 0
+		self.STATUS_ERROR = -1
+		self.STATUS_PAR2UNMATCHED = -4
+		self.STATUS_UNKNOWN = -2
+		self.STATUS_INIT = -3
 				
-		if(info[6] == cursmallest):
-			if(info[2] == 4 and info[5] == 1 ):
-				s = string.Template(segmentstr).substitute({'bytes':info[1], 'num':count, 'mid':cgi.escape(info[3], quote=True)})
-				subject = info[0]
-				group = info[4][0]
-				segs += s + '\r\n'
-				count = count + 1
+		self.MSGTYPE_ARCHIVE = 0
+		self.MSGTYPE_PAR2IDX = 1
+		self.MSGTYPE_PAR2VOL = 4
+		self.MSGTYPE_NFO = 2
+		self.MSGTYPE_SFV = 3
+		self.MSGTYPE_NZB = 5
 	
-	print ''
-	if(len(subject) == 0):
-		print 'There is no healthy PAR2!'
-		return -1
-	
-	print 'Get info from: ' + cgi.escape(subject, quote=True)
-	
-	#~ generate NZB
-	if(len(segs)):
-		templatedata = ''
-		with open('template.nzb', 'rt') as fp:
-			templatedata = fp.read()
-		fp.close()	
-		#~ print 	templatedata
-		s = string.Template(templatedata).substitute({'subject':cgi.escape(subject, quote=True), 'group':group, 'segments':segs})
+		self.infodata={}
+		self.getnzbinfo(data)
 		
-		with open('_tmpgenerated.nzb', 'wt') as fp:
-			fp.write(s)
-		fp.close()
 	
-	#~ download NZB
-	print ''
-	print 'Download the tiniest and healthiest par2'
-	if(DEBUG==0):
-		subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
-		subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 	
-	blocksize = analyzefilelistpar(infodata)
-	 
-	return blocksize
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-
-def getinfofrompar(infodata):
-	#~ outp['summary'] = fileinfo
-	output={}
-	numblock={}
-
-	for info in infodata['detail']:
-		#~ if(info[2] == 4):
-			#~ print info[5]
-		if(info[2] == 4 and info[5] == 1):
-			par2idx = 	info[0].lower().find('.par2')
-			
-			#~ extract rootname
-			npar = info[0][1:par2idx+5]
-			npar_sep1 = info[0][1:par2idx].rfind(' ')
-			npar_sep2 = info[0][1:par2idx].rfind('"')
-			npar_sep_vol = info[0][1:par2idx].lower().rfind('.vol')
-			minidx = max(npar_sep1,npar_sep2)
-			output['rootfile'] = npar
-			if(minidx != -1):
-				output['rootfile'] = npar[minidx+1:npar_sep_vol]
-			output['fullname'] = npar[minidx+1:par2idx+5]
-			
-			#~ extract block nums
-			nblock_str1 = npar[npar_sep_vol:par2idx-1]
-			nblock_str1_idx = nblock_str1.find('+')			
-			if(nblock_str1_idx == -1):
-				return {}
-			numblock[output['fullname']] = int(nblock_str1[nblock_str1_idx+1:])
-			info[6] = int(nblock_str1[nblock_str1_idx+1:])
-	
-	#~ output['nblocks'] = numblock
-	output['nblocks'] = 0
-	for key in numblock:
-		output['nblocks'] +=  numblock[key]
-
-	return output		
-
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-
-def getnzbinfo(data):
-	h = HTMLParser.HTMLParser()                   
-
-	soup = beautifulsoup.BeautifulSoup(data)
-	fileno = soup.findAll('file')
-
-	filesegs = []
-	fileinfo  = {}
-	fileinfo['pars'] = 0
-	fileinfo['nfo'] = 0
-	fileinfo['nofile'] = 0
-	fileinfo['rar'] = 0
-	fileinfo['nzb'] = 0
-	fileinfo['sfv'] = 0
-	fileinfo['postid'] = []
-	
-	allfiles={}
-	
-	rootfile = ''
-	nbytes = 0
-	for fno in fileno:	
-		try:
-			#~ print fno['subject']
-			segs = fno.findAll('segments')		
-			groups = fno.findAll('groups')
-			fsggs = 0
-			parfile = 0
-			typefile = 0
-			
-			#~ val =  re.search(r".r[0-9]{2,4}", fno['subject'], re.I)	
-			val_sample =  re.search(r"[\.\-]sample", fno['subject'], re.I)	
-			if(val_sample is not None):
-				continue				
-			par2idx = 	fno['subject'].lower().find('.par2')
-			if ( par2idx != -1):
-				typefile = 1
-				fileinfo['pars'] = fileinfo['pars'] + 1
-				npar_vol =  re.search(r".vol[0-9]{1,4}", fno['subject'][1:par2idx+5], re.I)	
-				if(npar_vol is not None):
-					typefile = 4
-			if (fno['subject'].lower().find('.nfo') != -1):
-				typefile = 2
-				fileinfo['nfo'] = fileinfo['nfo'] + 1
-			if (fno['subject'].lower().find('.sfv') != -1):
-				typefile = 3
-				fileinfo['sfv'] = fileinfo['sfv'] + 1
-			if (fno['subject'].lower().find('.nzb') != -1):
-				typefile = 5
-				fileinfo['nzb'] = fileinfo['nzb'] + 1
-			
-			if(typefile == 0):
-				allfiles[h.unescape(fno['subject'])] = 1
-				
-			cur_group = []
-			for g in groups:	
-				g_groups = g.findAll('group')
-				for g2 in g_groups:
-					cur_group.append(''.join(g2.findAll(text=True)))
-			
-			for s in segs:	
-				s_segs = s.findAll('segment')
-				fsggs = fsggs + len(s_segs)
-				postid = []
-				for s2 in s_segs:
-					nbytes += int (s2['bytes'])
-					filesegs.append([ h.unescape(fno['subject']), int (s2['bytes']), typefile, h.unescape(''.join(s2.findAll(text=True))), cur_group, -3, -2])
-
-		except Exception as e:
-			print "Error, could not parse NZB file " + str(e)
-			sys.exit()
-
-	allfiles_sorted=[]
-	for key in allfiles:
-		allfiles_sorted.append(key)
-	allfiles_sorted = sorted(allfiles_sorted)	
-	outp={}
-	outp['summary'] = fileinfo
-	outp['detail'] = filesegs
-	outp['filename'] = allfiles_sorted
-
-	#~ for s in allfiles_sorted:
-		#~ print s
-	#~ print len(allfiles_sorted)
-	return outp
-
-
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-
-
-def calculate_health(msg):
-	overall_count = 0
-	missing_count = 0
-	overall_count_articles = 0
-	missing_count_articles = 0
-	
-	#~ par ecc
-	if(DEBUG == 0):
-		for m in msg['detail']:
-			if( (m[2] == 4 or m[2] == 1)   and m[5] != 1 ):
-				#~ broken par remove all entries related to this file, -10 removal marking
-				for m1 in msg['detail']:
-					if(m[0] == m1[0] ):
-						m1[5] = -1	
-	if(DEBUG):
-		for m in msg['detail']:
-			if((m[2] == 4  or m[2] == 1)and m[5] != 1 ):
-				#~ broken par remove all entries related to this file, -10 removal marking
-				for m1 in msg['detail']:
-					if(m[0] == m1[0] ):
-						m1[5] = 1	
-
-	#~ compute block avail
-	parinfo = getinfofrompar(msg)
-	#~ download smallest par pack, anaylize with par2 the block size 
-	bsze = getsmallest_healthy_par(msg)
-
-	#~ archive
-	overall_count = 0
-	missing_count = 0
-	par2miss = 0
-	goodfiles_count = 0
-	for m in msg['detail']:
-		if(m[2] == 0 ):
-			overall_count += m[1]
-			goodfiles_count += 1
-			if( m[5] == -4 ):
-				par2miss  += m[1]
-			if( m[5] == -1 or m[5] == 0):
-				missing_count += m[1]
-	
-			
-
-	availblocks = parinfo['nblocks']
-	totblocks = float(overall_count) / float(bsze)
-	missblocks = float(missing_count) / float(bsze)
-	par2missblocks = float(par2miss) / float(bsze)
-	
-	print ''
-	#~ print 'Tot (yenc compressed): ' + str(overall_count) + ' bytes Miss (yenc compressed): ' + str(missing_count) + ' bytes'
-	print 'Analysis (yenc compressed)'
-	print '=========================='
-	print 'Total in bytes: ' + str(overall_count)
-	print 'Miss. in bytes: ' + str(missing_count)
-
-	if (missblocks > 0 and missblocks < 1):
-		missblocks = 1
-	if(bsze != -1):
-		#~ if (par2miss > 0):
-			#~ print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
+	def getsmallest_healthy_par(self):
 		
-		#~ these are conservative estimates
-		print 'Blocksize non-yenc compressed: ' + str(bsze)
-		print 'Totblocks: %.2f' % totblocks 
-		print '> Missblocks: %.2f' %  missblocks 
-		if(par2missblocks):
-			print '> Unrepairableblocks (non in par2): %.2f' %  par2missblocks 
-		print '> Availblocks: %.2f' %  availblocks
+		cursmallest = len(self.infodata['detail'])
+		smallest_par_segment = []
+		segmentstr = '<segment bytes="$bytes" number="$num">$mid</segment>'
+		count = 1
+		subject = ''
+		group = ''
+		#~ get smallest vol
+		for info in self.infodata['detail']:
+			if(info[6] < cursmallest):
+				if((info[2] == self.MSGTYPE_PAR2VOL or info[2] == self.MSGTYPE_PAR2IDX) and info[5] == self.STATUS_OK):
+					cursmallest = info[6]
+
+		#~ get all segments
+		segs = ''
+		for info in self.infodata['detail']:
+			if(cursmallest == -2):
+				if(info[2] == 1):
+					s = string.Template(segmentstr).substitute({'bytes':info[1], 'num':count, 'mid':cgi.escape(info[3], quote=True)})
+					subject = info[0]
+					group = info[4][0]
+					segs += s + '\r\n'
+					count = count + 1
+					
+			if(info[6] == cursmallest):
+				if(info[2] == 4 and info[5] == 1 ):
+					s = string.Template(segmentstr).substitute({'bytes':info[1], 'num':count, 'mid':cgi.escape(info[3], quote=True)})
+					subject = info[0]
+					group = info[4][0]
+					segs += s + '\r\n'
+					count = count + 1
+		
 		print ''
-		print 'Results'
-		print '=========================='
-		availblocks = availblocks - par2missblocks
-
-		if(missblocks == 0):
-			print 'Perfect data'
-		else:
+		if(len(subject) == 0):
+			print 'There is no healthy PAR2!'
+			return -1
+		
+		print 'Get info from: ' + cgi.escape(subject, quote=True)
+		
+		#~ generate NZB
+		if(len(segs)):
+			templatedata = ''
+			with open('template.nzb', 'rt') as fp:
+				templatedata = fp.read()
+			fp.close()	
+			#~ print 	templatedata
+			s = string.Template(templatedata).substitute({'subject':cgi.escape(subject, quote=True), 'group':group, 'segments':segs})
 			
-			if(availblocks > missblocks-BLOCKAPPROX and availblocks <= missblocks):
-				print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
-			elif(availblocks > missblocks):
-				print 'Ok or fixable through PAR2'
-			else:	
+			with open('_tmpgenerated.nzb', 'wt') as fp:
+				fp.write(s)
+			fp.close()
+		
+		#~ download NZB
+		print ''
+		print 'Download the tiniest and healthiest par2'
+		if(DEBUG==0):
+			subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
+			subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
+		
+		self.blocksize = self.analyzefilelistpar()
+		 
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+	def getinfofrompar(self):
+		#~ outp['summary'] = fileinfo
+		numblock={}
+
+		for info in self.infodata['detail']:
+			#~ if(info[2] == 4):
+				#~ print info[5]
+			if(info[2] == self.MSGTYPE_PAR2VOL and info[5] == self.STATUS_OK):
+				par2idx = 	info[0].lower().find('.par2')
+				
+				#~ extract rootname
+				npar = info[0][1:par2idx+5]
+				npar_sep1 = info[0][1:par2idx].rfind(' ')
+				npar_sep2 = info[0][1:par2idx].rfind('"')
+				npar_sep_vol = info[0][1:par2idx].lower().rfind('.vol')
+				minidx = max(npar_sep1,npar_sep2)
+				self.infodata['rootfile'] = npar
+				if(minidx != -1):
+					self.infodata['rootfile'] = npar[minidx+1:npar_sep_vol]
+				self.infodata['fullname'] = npar[minidx+1:par2idx+5]
+				
+				#~ extract block nums
+				nblock_str1 = npar[npar_sep_vol:par2idx-1]
+				nblock_str1_idx = nblock_str1.find('+')			
+				if(nblock_str1_idx == -1):
+					return {}
+				numblock[self.infodata['fullname']] = int(nblock_str1[nblock_str1_idx+1:])
+				info[6] = int(nblock_str1[nblock_str1_idx+1:])
+		
+		self.infodata['nblocks'] = 0
+		for key in numblock:
+			self.infodata['nblocks'] +=  numblock[key]
+
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+	def getnzbinfo(self, data):
+		h = HTMLParser.HTMLParser()                   
+
+		soup = beautifulsoup.BeautifulSoup(data)
+		fileno = soup.findAll('file')
+
+		filesegs = []
+		fileinfo  = {}
+		fileinfo['pars'] = 0
+		fileinfo['nfo'] = 0
+		fileinfo['nofile'] = 0
+		fileinfo['rar'] = 0
+		fileinfo['nzb'] = 0
+		fileinfo['sfv'] = 0
+		fileinfo['postid'] = []
+		
+		allfiles={}
+		
+		rootfile = ''
+		nbytes = 0
+		for fno in fileno:	
+			try:
+				#~ print fno['subject']
+				segs = fno.findAll('segments')		
+				groups = fno.findAll('groups')
+				fsggs = 0
+				parfile = 0
+				typefile = self.MSGTYPE_ARCHIVE
+				
+				#~ val =  re.search(r".r[0-9]{2,4}", fno['subject'], re.I)	
+				val_sample =  re.search(r"[\.\-]sample", fno['subject'], re.I)	
+				if(val_sample is not None):
+					continue				
+				par2idx = 	fno['subject'].lower().find('.par2')
+				if ( par2idx != -1):
+					typefile = self.MSGTYPE_PAR2IDX
+					fileinfo['pars'] = fileinfo['pars'] + 1
+					npar_vol =  re.search(r".vol[0-9]{1,4}", fno['subject'][1:par2idx+5], re.I)	
+					if(npar_vol is not None):
+						typefile = self.MSGTYPE_PAR2VOL
+				if (fno['subject'].lower().find('.nfo') != -1):
+					typefile = self.MSGTYPE_NFO
+					fileinfo['nfo'] = fileinfo['nfo'] + 1
+				if (fno['subject'].lower().find('.sfv') != -1):
+					typefile = self.MSGTYPE_SFV
+					fileinfo['sfv'] = fileinfo['sfv'] + 1
+				if (fno['subject'].lower().find('.nzb') != -1):
+					typefile = self.MSGTYPE_NZB
+					fileinfo['nzb'] = fileinfo['nzb'] + 1
+				
+				if(typefile == 0):
+					allfiles[h.unescape(fno['subject'])] = 1
+					
+				cur_group = []
+				for g in groups:	
+					g_groups = g.findAll('group')
+					for g2 in g_groups:
+						cur_group.append(''.join(g2.findAll(text=True)))
+
+				for s in segs:	
+					s_segs = s.findAll('segment')
+					fsggs = fsggs + len(s_segs)
+					postid = []
+					for s2 in s_segs:
+						nbytes += int (s2['bytes'])
+						subject = h.unescape(fno['subject'])
+						filesegs.append([ subject, 
+										 int (s2['bytes']), 
+										 typefile, 
+										 h.unescape(''.join(s2.findAll(text=True))), 
+										 cur_group, 
+										 self.STATUS_INIT,
+										 -2,
+										 re.findall(r'\"(.+?)\"',subject)])
+
+			except Exception as e:
+				print "Error, could not parse NZB file " + str(e)
+				sys.exit()
+
+		allfiles_sorted=[]
+		allfiles_sorted_clean=[]
+		for key in allfiles:
+			allfiles_sorted.append(key)
+		allfiles_sorted = sorted(allfiles_sorted)	
+		for s in allfiles_sorted:
+			allfiles_sorted_clean.append(re.findall(r'\"(.+?)\"',s))
+
+		self.infodata={}
+		self.infodata['summary'] = fileinfo
+		self.infodata['detail'] = filesegs
+		self.infodata['subject'] = allfiles_sorted
+		self.infodata['filename'] = allfiles_sorted_clean
+		#~ print len(allfiles_sorted)
+		#~ return outp
+
+
+
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+	def nzbh.nzb_fix(self):
+		print 'das'
+
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+	def analyzefilelistpar(self):
+		print 'Extracting info from par2'
+		process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
+		out, err = process.communicate()
+		bmsg = 'The block size used was '
+		nidx = out.find(bmsg)
+		nidx2 = out[nidx+len(bmsg):].find(' ')
+		blocksize = int(out[nidx+len(bmsg):nidx2+nidx+len(bmsg)])
+		if(nidx == -1 or nidx2 == -1):
+			print 'FATAL: cannot find block size, par2 or download failed'
+			return -1
+		nidx = out.find('Target')
+		listfiles=map(lambda x:x.lower(),re.findall(r'\"(.+?)\"',out[nidx:]))	
+		
+		self.par2info = {}
+		self.par2info['pars'] = 0
+		self.par2info['nfo'] = 0
+		self.par2info['nofile'] = 0
+		self.par2info['rar'] = 0
+		self.par2info['nzb'] = 0
+		self.par2info['sfv'] = 0
+		self.par2info['postid'] = []
+		self.par2info['files'] = []
+		for lf in listfiles:
+			typefile = self.MSGTYPE_ARCHIVE
+			if(lf.lower().find('-sample') != -1):
+				continue				
+			if ( lf.lower().find('.par2') != -1):
+				continue
+			if (lf.lower().find('.nfo') != -1):
+				typefile = self.MSGTYPE_NFO
+				self.par2info['nfo'] = self.par2info['nfo'] + 1
+			if (lf.lower().find('.sfv') != -1):
+				typefile = self.MSGTYPE_SFV
+				self.par2info['sfv'] = self.par2info['sfv'] + 1
+			if (lf.lower().find('.nzb') != -1):
+				typefile = self.MSGTYPE_NZB
+				self.par2info['nzb'] = self.par2info['nzb'] + 1
+			self.par2info['files'].append([lf, typefile] )	
+
+		#~ chk existency
+		self.par2funmatched = len(self.par2info['files'])
+		for p in self.par2info['files']:
+			if(self.infodata['filename'] == p):
+				self.par2funmatched -= 1
+				print p
+				break
+
+		if(len(listfiles) == 0):
+			print 'FATAL: cannot find available file list from par2'
+			return -1
+				
+		#~ declare them invalid
+		for info in self.infodata['detail']:
+			if(info[5] == self.STATUS_OK):
+				isfound = False
+				for l in listfiles:
+					if(info[0].lower().find(l) != -1):
+						isfound = True
+						break
+				if(isfound == False):
+					info[5]	= self.STATUS_PAR2UNMATCHED
+			
+		return blocksize	
+		
+
+	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
+
+
+	def calculate_health(self):
+		overall_count = 0
+		missing_count = 0
+		overall_count_articles = 0
+		missing_count_articles = 0
+		
+		#~ par ecc
+		if(DEBUG == 0):
+			for m in self.infodata['detail']:
+				if( (m[2] == self.MSGTYPE_PAR2VOL or m[2] == self.MSGTYPE_PAR2IDX)   and m[5] != self.STATUS_OK):
+					#~ broken par remove all entries related to this file, -10 removal marking
+					for m1 in self.infodata['detail']:
+						if(m[0] == m1[0] ):
+							m1[5] = -1	
+		if(DEBUG):
+			for m in self.infodata['detail']:
+				if( (m[2] == self.MSGTYPE_PAR2VOL or m[2] == self.MSGTYPE_PAR2IDX)   and m[5] != self.STATUS_OK):
+					for m1 in self.infodata['detail']:
+						if(m[0] == m1[0] ):
+							m1[5] = 1	
+
+		#~ compute block avail
+		parinfo = self.getinfofrompar()
+		#~ download smallest par pack, anaylize with par2 the block size 
+		self.getsmallest_healthy_par()
+		bsze = self.blocksize
+
+		#~ archive
+		overall_count = 0
+		missing_count = 0
+		par2miss = 0
+		goodfiles_count = 0
+		for m in self.infodata['detail']:
+			if(m[2] == self.MSGTYPE_ARCHIVE):
+				overall_count += m[1]
+				goodfiles_count += 1
+				if( m[5] == self.STATUS_PAR2UNMATCHED ):
+					par2miss  += m[1]
+				if( m[5] == self.STATUS_ERROR or m[5] == self.STATUS_MISS or m[5] == self.STATUS_INIT):
+					missing_count += m[1]
+		
+		availblocks = self.infodata['nblocks']
+		totblocks = float(overall_count) / float(bsze)
+		missblocks = float(missing_count) / float(bsze)
+		par2missblocks = float(par2miss) / float(bsze)
+		
+		print ''
+		#~ print 'Tot (yenc compressed): ' + str(overall_count) + ' bytes Miss (yenc compressed): ' + str(missing_count) + ' bytes'
+		print 'Analysis (yenc compressed)'
+		print '=========================='
+		print 'Total in bytes: ' + str(overall_count)
+		print 'Miss. in bytes: ' + str(missing_count)
+
+		if (missblocks > 0 and missblocks < 1):
+			missblocks = 1
+		if(bsze != -1):
+			#~ if (par2miss > 0):
+				#~ print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
+			
+			#~ these are conservative estimates
+			print 'Blocksize non-yenc compressed: ' + str(bsze)
+			print 'Totblocks: %.2f' % totblocks 
+			print '> Missblocks: %.2f' %  missblocks 
+			if(self.par2funmatched):
+				print '> There are ' + str(self.par2funmatched) + '/'+ str(len(self.par2info['files'])) +' files that are not found in par2'
+				print '> Unrepairable blocks (non in par2): %.2f' %  par2missblocks 
+				
+			print '> Availblocks: %.2f' %  availblocks
+			print ''
+			print 'Results'
+			print '=========================='
+			availblocks = availblocks - par2missblocks
+
+			if(missblocks == 0):
+				print 'Perfect data'
+			else:
+				
+				if(availblocks > missblocks-BLOCKAPPROX and availblocks <= missblocks):
+					print 'This *might* be fixable, this script uses a conservative estimate due to yenc compression'
+				elif(availblocks > missblocks):
+					print 'Ok or fixable through PAR2'
+				else:	
+					print 'This is broken'		
+		else:
+			print 'PAR2 info not available'
+			if(overall_count != missing_count):
 				print 'This is broken'		
-	else:
-		print 'PAR2 info not available'
-		if(overall_count != missing_count):
-			print 'This is broken'		
-		else:	
-			print 'Ok. All messages are on the server'
-	
+			else:	
+				print 'Ok. All messages are on the server'
+		
+
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
@@ -398,71 +500,6 @@ def signal_handler(signal, frame):
         print 'You pressed Ctrl+C!'
         sys.exit(0)
         	
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-'''
-def computeuncompresed_msgsz(params):
-
-	print params['files_qty']
-	print params['block_bytes']
-	print params['block_qty']
-	print params['total_bytes']
-	
-	#~ compute numblocks per file
-
-	#~ only last file can be composed of lesser blocks
-	#~ it is the remainder of the equally sized chunks subdivision
-	#~ this procedure is made by (almost) all packaging sw
-	nonfrac_files = params['files_qty']
-	val = math.modf(float(params['block_qty'])/float(nonfrac_files))
-	numblocks_perfile = int(val[1])
-	rem_numblocks_perfile = int(params['block_qty'])%int(nonfrac_files)
-	if(rem_numblocks_perfile):
-		nonfrac_files = params['files_qty'] -1
-		val = math.modf(float(params['block_qty'])/float(nonfrac_files))
-		numblocks_perfile = int(val[1])
-	lastfile_numblocks = params['block_qty'] - numblocks_perfile*nonfrac_files
-
-	print numblocks_perfile	
-	print lastfile_numblocks
-	
-	#~ only last segment of a file can be composed of lesser blocks
-	#~ see above 
-'''
-	
-#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
-
-def analyzefilelistpar(infofile):
-	print 'Extracting info from par2'
-	process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
-	out, err = process.communicate()
-	bmsg = 'The block size used was '
-	nidx = out.find(bmsg)
-	nidx2 = out[nidx+len(bmsg):].find(' ')
-	blocksize = int(out[nidx+len(bmsg):nidx2+nidx+len(bmsg)])
-	if(nidx == -1 or nidx2 == -1):
-		print 'FATAL: cannot find block size, par2 or download failed'
-		return -1
-	nidx = out.find('Target')
-	listfiles=map(lambda x:x.lower(),re.findall(r'\"(.+?)\"',out[nidx:]))	
-
-	if(len(listfiles) == 0):
-		print 'FATAL: cannot find available file list from par2'
-		return -1
-	
-	#~ declare them invalid
-	for info in infofile['detail']:
-		if(info[5] == 1):
-			isfound = False
-			for l in listfiles:
-				if(info[0].lower().find(l) != -1):
-					isfound = True
-					break
-			if(isfound == False):
-				info[5]	= -4
-		
-	return blocksize	
-	
 	
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 #~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -504,10 +541,10 @@ if(len(nzbfilename1)==0):
 	print 'missing nzb input' 
 	exit(1)			
 
+print 'Connecting with the server ('+str(conf['connections'])+' connections)'
 
-data1 = open(nzbfilename1).read()
 print 'Parsing NZB'
-outp = getnzbinfo(data1)
+nzbh = HealthChecker(open(nzbfilename1).read())
 nnt = []
 tthr = []
 
@@ -516,11 +553,15 @@ if(DEBUG == 0):
 	for i in xrange(conf['connections']):
 		nnt.append(TelnetConnection(conf,i))
 	for i in xrange(conf['connections']):
-		tthr.append( threading.Thread(target=nnt[i].init_and_stat, args=([outp]) ) )
-	tthr.append( threading.Thread(target=completion_monitor, args=(outp, conf['connections']) ) )	
+		tthr.append( threading.Thread(target=nnt[i].init_and_stat, args=([nzbh.infodata]) ) )
+	tthr.append( threading.Thread(target=completion_monitor, args=(nzbh.infodata, conf['connections']) ) )	
 	for t in tthr:
 		t.start()
 	for t in tthr:
 		t.join()
 
-msg = calculate_health(outp)
+nzbh.calculate_health()
+
+if(self.par2funmatched):
+	print 'Trying to fix the nzb'
+	nzbh.nzb_fix()
