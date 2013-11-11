@@ -97,6 +97,7 @@ class TelnetConnection():
 class HealthChecker():
 
 	def __init__(self, data):
+		self.data = data
 		self.STATUS_OK = 1
 		self.STATUS_MISS = 0
 		self.STATUS_ERROR = -1
@@ -315,8 +316,29 @@ class HealthChecker():
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-	def nzbh.nzb_fix(self):
-		print 'das'
+	def nzb_fix(self):
+		if(self.par2funmatched):
+			print 'Trying to fix the nzb'
+			if(len(self.par2info['files']) != len(self.infodata['filename'])):
+				print 'Found archive and par2 list do not match. Nothing to do here'	
+				return 0
+			
+			print 'Found archives and par2 list match in number'
+			#~ regenerate NZB
+			
+			#~ par2 will take care of reassiging filenames
+			count = 0
+			for p in self.par2info['files']:
+				tochng = self.infodata['filename'][count]
+				print tochng[0]
+				print p
+				self.data.encode('utf-8').replace(tochng, p)
+				#~ for m in self.infodata['detail']:
+					#~ if(m[0] == tochng):
+						#~ m[0] = '"'+p+'" yEnc' 
+				count += 1
+				
+				
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
@@ -358,14 +380,16 @@ class HealthChecker():
 			if (lf.lower().find('.nzb') != -1):
 				typefile = self.MSGTYPE_NZB
 				self.par2info['nzb'] = self.par2info['nzb'] + 1
-			self.par2info['files'].append([lf, typefile] )	
-
+			#~ self.par2info['files'].append([lf, typefile] )	
+			if(typefile == self.MSGTYPE_ARCHIVE):
+				self.par2info['files'].append(lf)	
+		
+		#~ print self.par2info['files']
 		#~ chk existency
 		self.par2funmatched = len(self.par2info['files'])
 		for p in self.par2info['files']:
 			if(self.infodata['filename'] == p):
 				self.par2funmatched -= 1
-				print p
 				break
 
 		if(len(listfiles) == 0):
@@ -453,8 +477,9 @@ class HealthChecker():
 			print 'Totblocks: %.2f' % totblocks 
 			print '> Missblocks: %.2f' %  missblocks 
 			if(self.par2funmatched):
-				print '> There are ' + str(self.par2funmatched) + '/'+ str(len(self.par2info['files'])) +' files that are not found in par2'
-				print '> Unrepairable blocks (non in par2): %.2f' %  par2missblocks 
+				print '> There are ' + str(self.par2funmatched) + '/'+ str(len(self.par2info['files'])) +' files not found in par2'
+			if(par2missblocks):	
+				print '> Unrepairable blocks (non in par2): %.2f' %  par2missblocks
 				
 			print '> Availblocks: %.2f' %  availblocks
 			print ''
@@ -561,7 +586,4 @@ if(DEBUG == 0):
 		t.join()
 
 nzbh.calculate_health()
-
-if(self.par2funmatched):
-	print 'Trying to fix the nzb'
-	nzbh.nzb_fix()
+nzbh.nzb_fix()
