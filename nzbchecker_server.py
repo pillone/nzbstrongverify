@@ -97,7 +97,7 @@ class TelnetConnection():
 class HealthChecker():
 
 	def __init__(self, data):
-		self.data = data
+		self.data = data.encode('utf-8')
 		self.STATUS_OK = 1
 		self.STATUS_MISS = 0
 		self.STATUS_ERROR = -1
@@ -114,6 +114,7 @@ class HealthChecker():
 	
 		self.infodata={}
 		self.getnzbinfo(data)
+		self.blocksize = 0
 		
 	
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
@@ -174,11 +175,9 @@ class HealthChecker():
 		#~ download NZB
 		print ''
 		print 'Download the tiniest and healthiest par2'
-		if(DEBUG==0):
+		if(DEBUG==0 ):
 			subprocess.call(["rm","-rf","dst/_tmpgenerated"], stdout=subprocess.PIPE)
 			subprocess.call(["nzbget","-c","nzbget.conf.commandline","_tmpgenerated.nzb"], stdout=subprocess.PIPE)
-		
-		self.blocksize = self.analyzefilelistpar()
 		 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
@@ -237,6 +236,7 @@ class HealthChecker():
 		
 		rootfile = ''
 		nbytes = 0
+		
 		for fno in fileno:	
 			try:
 				#~ print fno['subject']
@@ -289,8 +289,7 @@ class HealthChecker():
 										 h.unescape(''.join(s2.findAll(text=True))), 
 										 cur_group, 
 										 self.STATUS_INIT,
-										 -2,
-										 re.findall(r'\"(.+?)\"',subject)])
+										 -2])
 
 			except Exception as e:
 				print "Error, could not parse NZB file " + str(e)
@@ -302,14 +301,14 @@ class HealthChecker():
 			allfiles_sorted.append(key)
 		allfiles_sorted = sorted(allfiles_sorted)	
 		for s in allfiles_sorted:
-			allfiles_sorted_clean.append(re.findall(r'\"(.+?)\"',s))
+			allfiles_sorted_clean.append(re.findall(r'\"(.+?)\"',s)[0])
 
 		self.infodata={}
 		self.infodata['summary'] = fileinfo
 		self.infodata['detail'] = filesegs
 		self.infodata['subject'] = allfiles_sorted
 		self.infodata['filename'] = allfiles_sorted_clean
-		#~ print len(allfiles_sorted)
+		#~ print self.infodata['filename']
 		#~ return outp
 
 
@@ -326,19 +325,36 @@ class HealthChecker():
 			print 'Found archives and par2 list match in number'
 			#~ regenerate NZB
 			
-			#~ par2 will take care of reassiging filenames
+			#~ par2 will take care of reassiging filenames, saving fixed file
 			count = 0
 			for p in self.par2info['files']:
-				tochng = self.infodata['filename'][count]
-				print tochng[0]
-				print p
-				self.data.encode('utf-8').replace(tochng, p)
-				#~ for m in self.infodata['detail']:
-					#~ if(m[0] == tochng):
-						#~ m[0] = '"'+p+'" yEnc' 
+				self.data = self.data.replace(self.infodata['filename'][count], p)
+				self.infodata['filename'][count] = p
 				count += 1
-				
-				
+			with open('fixed.nzb', 'wt') as fp:
+				fp.write(self.data)
+			fp.close()
+			#~ replace broken segments			
+			counti = 1
+			for m in self.infodata['detail']:
+				if(m[5] == self.STATUS_PAR2UNMATCHED):
+					m[5] = self.STATUS_OK
+					print counti
+					counti = counti + 1
+			
+			#~ check health
+			print ''
+			print '********************************************'			
+			print '********************************************'
+			print 'THE FOLLOWING IS ABOUT THE AUTO-FIXED NZB'
+			print 'this is based on educated guess'
+			print 'use it as last resort'
+			print '********************************************'
+			print '********************************************'
+			print ''
+
+			nzbh.calculate_health(True)
+							
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
@@ -388,9 +404,10 @@ class HealthChecker():
 		#~ chk existency
 		self.par2funmatched = len(self.par2info['files'])
 		for p in self.par2info['files']:
-			if(self.infodata['filename'] == p):
-				self.par2funmatched -= 1
-				break
+			for s in self.infodata['filename']:
+				if(s == p):
+					self.par2funmatched -= 1
+					break
 
 		if(len(listfiles) == 0):
 			print 'FATAL: cannot find available file list from par2'
@@ -413,7 +430,7 @@ class HealthChecker():
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
 
-	def calculate_health(self):
+	def calculate_health(self, mode_recheck=False ):
 		overall_count = 0
 		missing_count = 0
 		overall_count_articles = 0
@@ -437,8 +454,9 @@ class HealthChecker():
 		#~ compute block avail
 		parinfo = self.getinfofrompar()
 		#~ download smallest par pack, anaylize with par2 the block size 
-		self.getsmallest_healthy_par()
-		bsze = self.blocksize
+		if(mode_recheck == False):
+			self.getsmallest_healthy_par()
+		self.blocksize = self.analyzefilelistpar()
 
 		#~ archive
 		overall_count = 0
@@ -455,9 +473,9 @@ class HealthChecker():
 					missing_count += m[1]
 		
 		availblocks = self.infodata['nblocks']
-		totblocks = float(overall_count) / float(bsze)
-		missblocks = float(missing_count) / float(bsze)
-		par2missblocks = float(par2miss) / float(bsze)
+		totblocks = float(overall_count) / float(self.blocksize)
+		missblocks = float(missing_count) / float(self.blocksize)
+		par2missblocks = float(par2miss) / float(self.blocksize)
 		
 		print ''
 		#~ print 'Tot (yenc compressed): ' + str(overall_count) + ' bytes Miss (yenc compressed): ' + str(missing_count) + ' bytes'
@@ -468,12 +486,12 @@ class HealthChecker():
 
 		if (missblocks > 0 and missblocks < 1):
 			missblocks = 1
-		if(bsze != -1):
+		if(self.blocksize != -1):
 			#~ if (par2miss > 0):
 				#~ print 'Broken NZB? Recovery file segments not listed in par2: ' + str(par2miss) + '/' + str(goodfiles_count)
 			
 			#~ these are conservative estimates
-			print 'Blocksize non-yenc compressed: ' + str(bsze)
+			print 'Blocksize non-yenc compressed: ' + str(self.blocksize)
 			print 'Totblocks: %.2f' % totblocks 
 			print '> Missblocks: %.2f' %  missblocks 
 			if(self.par2funmatched):
