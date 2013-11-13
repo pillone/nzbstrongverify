@@ -16,7 +16,7 @@ import signal
 import subprocess
 import math
 
-DEBUG = 1
+DEBUG = 0
 MAXREPEAT = 3
 TIMEOUT = 5
 BLOCKAPPROX = 2
@@ -113,14 +113,14 @@ class HealthChecker():
 		self.MSGTYPE_NZB = 5
 	
 		self.infodata={}
-		self.getnzbinfo(data)
+		self.nzb_getinfo(data)
 		self.blocksize = 0
 		
 	
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 	
-	def getsmallest_healthy_par(self):
-		
+	def download_smallest_par2(self):
+
 		cursmallest = len(self.infodata['detail'])
 		smallest_par_segment = []
 		segmentstr = '<segment bytes="$bytes" number="$num">$mid</segment>'
@@ -181,7 +181,8 @@ class HealthChecker():
 		 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-	def getinfofrompar(self):
+	def par2_getrepairingblocks(self):
+
 		#~ outp['summary'] = fileinfo
 		numblock={}
 
@@ -216,7 +217,8 @@ class HealthChecker():
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-	def getnzbinfo(self, data):
+	def nzb_getinfo(self, data):
+
 		h = HTMLParser.HTMLParser()                   
 
 		soup = beautifulsoup.BeautifulSoup(data)
@@ -231,14 +233,14 @@ class HealthChecker():
 		fileinfo['nzb'] = 0
 		fileinfo['sfv'] = 0
 		fileinfo['postid'] = []
-		
+		allfiles_LUT={}
 		allfiles={}
 		
 		rootfile = ''
 		nbytes = 0
 		
 		for fno in fileno:	
-			try:
+			#~ try:
 				#~ print fno['subject']
 				segs = fno.findAll('segments')		
 				groups = fno.findAll('groups')
@@ -283,6 +285,11 @@ class HealthChecker():
 					for s2 in s_segs:
 						nbytes += int (s2['bytes'])
 						subject = h.unescape(fno['subject'])
+						keyname = re.findall(r'\"(.+?)\"',subject)[0]
+						if(keyname not in allfiles_LUT):
+							allfiles_LUT[keyname] = []							
+						allfiles_LUT[keyname].append(len(filesegs))							
+
 						filesegs.append([ subject, 
 										 int (s2['bytes']), 
 										 typefile, 
@@ -291,10 +298,9 @@ class HealthChecker():
 										 self.STATUS_INIT,
 										 -2])
 
-			except Exception as e:
-				print "Error, could not parse NZB file " + str(e)
-				sys.exit()
-
+			#~ except Exception as e:
+				#~ print "Error, could not parse NZB file " + str(e)
+				#~ sys.exit()
 		allfiles_sorted=[]
 		allfiles_sorted_clean=[]
 		for key in allfiles:
@@ -308,6 +314,7 @@ class HealthChecker():
 		self.infodata['detail'] = filesegs
 		self.infodata['subject'] = allfiles_sorted
 		self.infodata['filename'] = allfiles_sorted_clean
+		self.infodata['filename_LUT'] = allfiles_LUT
 		#~ print self.infodata['filename']
 		#~ return outp
 
@@ -329,19 +336,16 @@ class HealthChecker():
 			count = 0
 			for p in self.par2info['files']:
 				self.data = self.data.replace(self.infodata['filename'][count], p)
+				for n in self.infodata['filename_LUT'][ self.infodata['filename'][count]]:
+					self.infodata['detail'][n][0] = p	
+					if(self.infodata['detail'][n][5] == self.STATUS_PAR2UNMATCHED):
+						self.infodata['detail'][n][5] = self.STATUS_OK
 				self.infodata['filename'][count] = p
 				count += 1
 			with open('fixed.nzb', 'wt') as fp:
 				fp.write(self.data)
 			fp.close()
-			#~ replace broken segments			
-			counti = 1
-			for m in self.infodata['detail']:
-				if(m[5] == self.STATUS_PAR2UNMATCHED):
-					m[5] = self.STATUS_OK
-					print counti
-					counti = counti + 1
-			
+		
 			#~ check health
 			print ''
 			print '********************************************'			
@@ -353,12 +357,12 @@ class HealthChecker():
 			print '********************************************'
 			print ''
 
-			nzbh.calculate_health(True)
+			nzbh.compute_health(True)
 							
 
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
-	def analyzefilelistpar(self):
+	def par2_extract_info(self):
 		print 'Extracting info from par2'
 		process = subprocess.Popen(['par2verify', 'dst/_tmpgenerated/*.par2'], stdout=subprocess.PIPE)
 		out, err = process.communicate()
@@ -415,7 +419,7 @@ class HealthChecker():
 				
 		#~ declare them invalid
 		for info in self.infodata['detail']:
-			if(info[5] == self.STATUS_OK):
+			if(info[5] == self.STATUS_OK and info[2] == self.MSGTYPE_ARCHIVE):
 				isfound = False
 				for l in listfiles:
 					if(info[0].lower().find(l) != -1):
@@ -430,7 +434,8 @@ class HealthChecker():
 	#~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ 
 
 
-	def calculate_health(self, mode_recheck=False ):
+	def compute_health(self, mode_recheck=False ):
+
 		overall_count = 0
 		missing_count = 0
 		overall_count_articles = 0
@@ -452,11 +457,11 @@ class HealthChecker():
 							m1[5] = 1	
 
 		#~ compute block avail
-		parinfo = self.getinfofrompar()
+		parinfo = self.par2_getrepairingblocks()
 		#~ download smallest par pack, anaylize with par2 the block size 
 		if(mode_recheck == False):
-			self.getsmallest_healthy_par()
-		self.blocksize = self.analyzefilelistpar()
+			self.download_smallest_par2()
+		self.blocksize = self.par2_extract_info()
 
 		#~ archive
 		overall_count = 0
@@ -603,5 +608,5 @@ if(DEBUG == 0):
 	for t in tthr:
 		t.join()
 
-nzbh.calculate_health()
+nzbh.compute_health()
 nzbh.nzb_fix()
